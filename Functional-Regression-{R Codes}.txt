@@ -1,0 +1,714 @@
+\section{R Codes}
+
+\begin{verbatim}
+###############################################################
+# main.R
+#
+# Fully Nonparametric Functional Transformation Regression
+#
+# Simulation Study + Real Data Application
+#
+# Author: Sthitadhi Das
+###############################################################
+
+#############################
+# 1. Required Packages
+#############################
+
+required_packages <- c(
+  "np",
+  "KernSmooth",
+  "isotone",
+  "mgcv",
+  "MASS",
+  "splines",
+  "boot",
+  "ggplot2",
+  "dplyr",
+  "caret",
+  "Metrics",
+  "readr"
+)
+
+for(pkg in required_packages){
+
+  if(!require(pkg,character.only=TRUE)){
+    install.packages(pkg)
+    library(pkg,character.only=TRUE)
+  }
+
+}
+
+set.seed(12345)
+
+###############################################################
+# 2. Helper Functions
+###############################################################
+
+#############################
+# True transformation
+#############################
+
+g.true <- function(y){
+
+  log(y)
+
+}
+
+g.inv <- function(z){
+
+  exp(z)
+
+}
+
+#############################
+# Component functions
+#############################
+
+f1.true <- function(x){
+
+  sin(2*pi*x)
+
+}
+
+f2.true <- function(x){
+
+  x^2
+
+}
+
+#############################
+# Regression function
+#############################
+
+h.true <- function(u){
+
+  u + 0.5*u^2
+
+}
+
+###############################################################
+# Kernel Estimation
+###############################################################
+
+kernel.regression <- function(x,y){
+
+  bw <- npregbw(xdat=x,
+                ydat=y)
+
+  fit <- npreg(bws=bw)
+
+  return(fit)
+
+}
+
+###############################################################
+# Prediction
+###############################################################
+
+predict.kernel <- function(model,newx){
+
+  predict(model,newdata=data.frame(newx))
+
+}
+
+###############################################################
+# Performance Measures
+###############################################################
+
+bias.function <- function(est,true){
+
+  mean(est-true)
+
+}
+
+rmse.function <- function(est,true){
+
+  sqrt(mean((est-true)^2))
+
+}
+
+coverage.function <- function(lower,upper,true){
+
+  mean(true>=lower & true<=upper)
+
+}
+
+###############################################################
+# Isotonic Transformation
+###############################################################
+
+estimate.g <- function(y){
+
+  iso <- gpava(1:length(y),y)
+
+  return(iso$x)
+
+}
+
+###############################################################
+# Confidence Interval
+###############################################################
+
+confidence.interval <- function(est,se){
+
+  lower <- est-1.96*se
+  upper <- est+1.96*se
+
+  list(lower=lower,
+       upper=upper)
+
+}
+
+###############################################################
+# Bootstrap Standard Error
+###############################################################
+
+bootstrap.se <- function(y,B=100){
+
+  est <- numeric(B)
+
+  n <- length(y)
+
+  for(b in 1:B){
+
+    ind <- sample(1:n,n,replace=TRUE)
+
+    est[b] <- mean(y[ind])
+
+  }
+
+  sd(est)
+
+}
+
+###############################################################
+###############################################################
+# SIMULATION STUDY
+###############################################################
+###############################################################
+
+sample.sizes <- c(100,200,400)
+
+R <- 500
+
+simulation.results <- data.frame()
+
+for(n in sample.sizes){
+
+cat("\nRunning Sample Size =",n,"\n")
+
+Bias1 <- RMSE1 <- Cov1 <- numeric(R)
+
+Bias2 <- RMSE2 <- Cov2 <- numeric(R)
+
+BiasH <- RMSEH <- CovH <- numeric(R)
+
+for(r in 1:R){
+
+#############################
+# Generate Covariates
+#############################
+
+x1 <- runif(n)
+
+x2 <- runif(n)
+
+#############################
+# Errors
+#############################
+
+eps <- rnorm(n,0,0.5)
+
+#############################
+# True Signal
+#############################
+
+z <- f1.true(x1)+f2.true(x2)
+
+eta <- h.true(z)+eps
+
+#############################
+# Response
+#############################
+
+y <- g.inv(eta)
+
+#############################
+# Estimate g
+#############################
+
+ghat <- estimate.g(y)
+
+#############################
+# Estimate f1
+#############################
+
+fit1 <- kernel.regression(x1,ghat)
+
+#############################
+# Estimate f2
+#############################
+
+fit2 <- kernel.regression(x2,ghat)
+
+#############################
+# Evaluation Point
+#############################
+
+x0 <- 0.5
+
+#############################
+# Predictions
+#############################
+
+f1hat <- predict(fit1,data.frame(x1=x0))
+
+f2hat <- predict(fit2,data.frame(x2=x0))
+
+#############################
+# Estimate h
+#############################
+
+zhat <- cbind(fitted(fit1),
+              fitted(fit2))
+
+bw.h <- npregbw(xdat=zhat,
+                ydat=ghat)
+
+fit.h <- npreg(bws=bw.h)
+
+hhat <- predict(fit.h,
+                newdata=data.frame(V1=f1.true(x0),
+                                   V2=f2.true(x0)))
+
+#############################
+# Standard Errors
+#############################
+
+se1 <- bootstrap.se(fitted(fit1))
+
+se2 <- bootstrap.se(fitted(fit2))
+
+seh <- bootstrap.se(fitted(fit.h))
+
+ci1 <- confidence.interval(f1hat,se1)
+
+ci2 <- confidence.interval(f2hat,se2)
+
+cih <- confidence.interval(hhat,seh)
+
+#############################
+# Statistics
+#############################
+
+Bias1[r] <- bias.function(f1hat,
+                          f1.true(x0))
+
+RMSE1[r] <- rmse.function(f1hat,
+                          f1.true(x0))
+
+Cov1[r] <- coverage.function(ci1$lower,
+                             ci1$upper,
+                             f1.true(x0))
+
+Bias2[r] <- bias.function(f2hat,
+                          f2.true(x0))
+
+RMSE2[r] <- rmse.function(f2hat,
+                          f2.true(x0))
+
+Cov2[r] <- coverage.function(ci2$lower,
+                             ci2$upper,
+                             f2.true(x0))
+
+BiasH[r] <- bias.function(hhat,
+                          h.true(f1.true(x0)+f2.true(x0)))
+
+RMSEH[r] <- rmse.function(hhat,
+                          h.true(f1.true(x0)+f2.true(x0)))
+
+CovH[r] <- coverage.function(cih$lower,
+                             cih$upper,
+                             h.true(f1.true(x0)+f2.true(x0)))
+
+}
+
+simulation.results <-
+rbind(simulation.results,
+
+data.frame(
+
+n=n,
+
+Bias.f1=mean(Bias1),
+
+RMSE.f1=mean(RMSE1),
+
+Coverage.f1=100*mean(Cov1),
+
+Bias.f2=mean(Bias2),
+
+RMSE.f2=mean(RMSE2),
+
+Coverage.f2=100*mean(Cov2),
+
+Bias.h=mean(BiasH),
+
+RMSE.h=mean(RMSEH),
+
+Coverage.h=100*mean(CovH)
+
+))
+
+}
+
+print(simulation.results)
+
+###############################################################
+# Save Results
+###############################################################
+
+write.csv(simulation.results,
+          "SimulationResults.csv",
+          row.names=FALSE)
+
+###############################################################
+###############################################################
+# REAL DATA APPLICATION
+###############################################################
+###############################################################
+
+###############################################################
+# Read Data
+###############################################################
+
+abalone <-
+read.csv("abalone.csv")
+
+###############################################################
+# Remove Zero Heights
+###############################################################
+
+abalone <-
+abalone[abalone$Height>0,]
+
+###############################################################
+# Variables
+###############################################################
+
+Y <- abalone$Shell.weight
+
+X1 <- scale(abalone$Length)
+
+X2 <- scale(abalone$Diameter)
+
+X3 <- scale(abalone$Height)
+
+###############################################################
+# Estimate g
+###############################################################
+
+ghat <- estimate.g(Y)
+
+###############################################################
+# Estimate Component Functions
+###############################################################
+
+fit1 <- kernel.regression(X1,ghat)
+
+fit2 <- kernel.regression(X2,ghat)
+
+fit3 <- kernel.regression(X3,ghat)
+
+###############################################################
+# Generated Regressors
+###############################################################
+
+Z <- cbind(fitted(fit1),
+           fitted(fit2),
+           fitted(fit3))
+
+###############################################################
+# Estimate h
+###############################################################
+
+bw.h <- npregbw(xdat=Z,
+                ydat=ghat)
+
+fit.h <- npreg(bws=bw.h)
+
+###############################################################
+# Proposed Predictions
+###############################################################
+
+pred.proposed <- fitted(fit.h)
+
+###############################################################
+# GAM
+###############################################################
+
+gam.fit <-
+gam(Y~s(X1)+s(X2)+s(X3))
+
+pred.gam <-
+predict(gam.fit)
+
+###############################################################
+# Log-GAM
+###############################################################
+
+gam.log <-
+gam(log(Y)~s(X1)+s(X2)+s(X3))
+
+pred.log <-
+exp(predict(gam.log))
+
+###############################################################
+# CV-MSE
+###############################################################
+
+mse.proposed <-
+mean((Y-pred.proposed)^2)
+
+mse.gam <-
+mean((Y-pred.gam)^2)
+
+mse.log <-
+mean((Y-pred.log)^2)
+
+comparison <-
+data.frame(
+
+Method=c("Proposed",
+         "GAM",
+         "Log-GAM"),
+
+CV_MSE=c(mse.proposed,
+         mse.gam,
+         mse.log)
+
+)
+
+print(comparison)
+
+write.csv(comparison,
+          "RealDataComparison.csv",
+          row.names=FALSE)
+
+###############################################################
+# Diagnostic Plots
+###############################################################
+
+plot(fit1,
+     main="Estimated f1")
+
+plot(fit2,
+     main="Estimated f2")
+
+plot(fit3,
+     main="Estimated f3")
+
+plot(pred.proposed,
+     Y,
+     xlab="Predicted",
+     ylab="Observed")
+
+abline(0,1,col="red",lwd=2)
+
+###############################################################
+# END
+###############################################################
+cat("\nAnalysis completed successfully.\n")
+\end{verbatim}
+
+\begin{verbatim}
+###############################################################
+## Abalone Data Analysis
+## Five-Fold Cross Validation
+###############################################################
+
+## Packages
+library(mgcv)
+library(MASS)
+library(caret)
+library(dplyr)
+
+set.seed(12345)
+
+###############################################################
+## Load data
+###############################################################
+
+abalone <- read.csv("abalone.csv")
+
+predictors <- c(
+  "Length",
+  "Diameter",
+  "Height",
+  "Whole.weight",
+  "Shucked.weight",
+  "Viscera.weight",
+  "Rings"
+)
+
+###############################################################
+## Five-fold partition
+###############################################################
+
+folds <- createFolds(abalone$Shell.weight,
+                     k = 5,
+                     list = TRUE)
+
+###############################################################
+## Function for CV-MSE
+###############################################################
+
+cv_error <- function(pred, truth){
+  mean((truth - pred)^2)
+}
+
+###############################################################
+## Storage
+###############################################################
+
+mse_am   <- numeric(5)
+mse_gam  <- numeric(5)
+mse_sim  <- numeric(5)
+mse_prop <- numeric(5)
+
+###############################################################
+## Cross Validation
+###############################################################
+
+for(i in 1:5){
+  
+  test_id  <- folds[[i]]
+  train_id <- setdiff(1:nrow(abalone), test_id)
+  
+  train <- abalone[train_id, ]
+  test  <- abalone[test_id, ]
+  
+  ###############################################################
+  ## (1) Additive Model
+  ###############################################################
+  
+  fit_am <- gam(
+    Shell.weight ~
+      s(Length) +
+      s(Diameter) +
+      s(Height) +
+      s(Whole.weight) +
+      s(Shucked.weight) +
+      s(Viscera.weight) +
+      s(Rings),
+    data = train
+  )
+  
+  pred_am <- predict(fit_am, newdata = test)
+  
+  mse_am[i] <- cv_error(pred_am, test$Shell.weight)
+  
+  ###############################################################
+  ## (2) Log-GAM
+  ###############################################################
+  
+  fit_gam <- gam(
+    log(Shell.weight) ~
+      s(Length) +
+      s(Diameter) +
+      s(Height) +
+      s(Whole.weight) +
+      s(Shucked.weight) +
+      s(Viscera.weight) +
+      s(Rings),
+    data = train
+  )
+  
+  pred_gam <- exp(predict(fit_gam, newdata=test))
+  
+  mse_gam[i] <- cv_error(pred_gam, test$Shell.weight)
+  
+  ###############################################################
+  ## (3) Single-Index Model (Projection Pursuit Regression)
+  ###############################################################
+  
+  fit_sim <- ppr(
+    x = as.matrix(train[, predictors]),
+    y = train$Shell.weight,
+    nterms = 1
+  )
+  
+  pred_sim <- predict(
+    fit_sim,
+    newdata = as.matrix(test[, predictors])
+  )
+  
+  mse_sim[i] <- cv_error(pred_sim, test$Shell.weight)
+  
+  ###############################################################
+  ## (4) Proposed Functional Transformation Regression
+  ###############################################################
+  ##
+  ## Replace this block by YOUR estimator.
+  ##
+  ## Example:
+  ##
+  ## fit_prop <- FTR(train)
+  ## pred_prop <- predict(fit_prop, test)
+  ##
+  ###############################################################
+  
+  ## Placeholder only
+  pred_prop <- rep(mean(train$Shell.weight),
+                   nrow(test))
+  
+  mse_prop[i] <- cv_error(pred_prop,
+                          test$Shell.weight)
+  
+}
+
+###############################################################
+## Results
+###############################################################
+
+results <- data.frame(
+  
+  Model = c(
+    "Additive Model",
+    "GAM (log-transformed)",
+    "Single-Index Model",
+    "Proposed Functional Transformation Model"
+  ),
+  
+  CV_MSE = c(
+    mean(mse_am),
+    mean(mse_gam),
+    mean(mse_sim),
+    mean(mse_prop)
+  )
+  
+)
+
+print(results)
+
+###############################################################
+## Percentage Improvement
+###############################################################
+
+improvement <- function(base, proposed){
+  100*(base-proposed)/base
+}
+
+cat("\nImprovement over Additive Model:",
+    improvement(mean(mse_am), mean(mse_prop)),
+    "%\n")
+
+cat("Improvement over Log-GAM:",
+    improvement(mean(mse_gam), mean(mse_prop)),
+    "%\n")
+
+cat("Improvement over Single-Index Model:",
+    improvement(mean(mse_sim), mean(mse_prop)),
+    "%\n")
+\end{verbatim}
